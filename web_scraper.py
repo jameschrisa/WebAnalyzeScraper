@@ -11,7 +11,13 @@ import pync
 setup(quiet=True)
 
 def rate_limited_get(url, timeout=10):
-    # ... (keep the existing rate_limited_get function)
+    try:
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response
+    except requests.RequestException as e:
+        error(f"Error fetching {url}: {str(e)}")
+        return None
 
 def sanitize_filename(filename):
     # Remove hash from filename
@@ -84,14 +90,17 @@ def download_resource(url, base_url, base_dir, filename_map):
     return None, None
 
 def update_file_references(file_path, filename_map):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    for original, clean in filename_map.items():
-        content = content.replace(original, clean)
-    
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(content)
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        for original, clean in filename_map.items():
+            content = content.replace(original, clean)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except Exception as e:
+        error(f"Error updating references in {file_path}: {str(e)}")
 
 def scrape_and_reconstruct(url):
     with spinner(f"Analyzing and downloading files from {url}"):
@@ -135,8 +144,11 @@ def scrape_and_reconstruct(url):
             for future in concurrent.futures.as_completed(future_to_resource):
                 original_url, new_path = future.result()
                 if new_path:
-                    soup.find(src=original_url)['src'] = new_path
-                    soup.find(href=original_url)['href'] = new_path
+                    for tag in soup.find_all(['link', 'script', 'img']):
+                        if tag.get('src') == original_url:
+                            tag['src'] = new_path
+                        elif tag.get('href') == original_url:
+                            tag['href'] = new_path
         
         # Update references in HTML
         with open(html_path, 'w', encoding='utf-8') as f:
