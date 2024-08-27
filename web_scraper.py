@@ -5,10 +5,14 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import mimetypes
 import concurrent.futures
-from cli_ui import info, error, warning, setup, spinner
-import pync
+import warnings
 
-setup(quiet=True)
+# Suppress the urllib3 warning
+warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
+
+# Simple progress indicator
+def print_progress(message):
+    print(f"[INFO] {message}")
 
 def rate_limited_get(url, timeout=10):
     try:
@@ -16,7 +20,7 @@ def rate_limited_get(url, timeout=10):
         response.raise_for_status()
         return response
     except requests.RequestException as e:
-        error(f"Error fetching {url}: {str(e)}")
+        print(f"[ERROR] Error fetching {url}: {str(e)}")
         return None
 
 def sanitize_filename(filename):
@@ -30,19 +34,19 @@ def download_file(url, path):
         try:
             with open(path, 'wb') as f:
                 f.write(response.content)
-            info(f"Downloaded: {url} as {path}")
+            print(f"[INFO] Downloaded: {url} as {path}")
             return True
         except IOError as e:
-            error(f"Error saving file {path}: {str(e)}")
+            print(f"[ERROR] Error saving file {path}: {str(e)}")
     else:
-        warning(f"Failed to download: {url}")
+        print(f"[WARNING] Failed to download: {url}")
     return False
 
 def create_directory(path):
     try:
         os.makedirs(path, exist_ok=True)
     except OSError as e:
-        error(f"Error creating directory {path}: {str(e)}")
+        print(f"[ERROR] Error creating directory {path}: {str(e)}")
 
 def get_resource_type(url):
     _, ext = os.path.splitext(url)
@@ -86,7 +90,7 @@ def download_resource(url, base_url, base_dir, filename_map):
             filename_map[original_filename] = os.path.join(dir_path, resource_type, clean_filename)
             return url, os.path.relpath(resource_path, base_dir)
     except Exception as e:
-        error(f"Error downloading resource {url}: {str(e)}")
+        print(f"[ERROR] Error downloading resource {url}: {str(e)}")
     return None, None
 
 def update_file_references(file_path, filename_map):
@@ -100,74 +104,68 @@ def update_file_references(file_path, filename_map):
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
     except Exception as e:
-        error(f"Error updating references in {file_path}: {str(e)}")
+        print(f"[ERROR] Error updating references in {file_path}: {str(e)}")
 
 def scrape_and_reconstruct(url):
-    with spinner(f"Analyzing and downloading files from {url}"):
-        response = rate_limited_get(url)
-        if not response:
-            error(f"Failed to fetch the main page: {url}")
-            return
+    print_progress(f"Analyzing and downloading files from {url}")
+    response = rate_limited_get(url)
+    if not response:
+        print(f"[ERROR] Failed to fetch the main page: {url}")
+        return
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        domain = urlparse(url).netloc
-        
-        downloads_folder = os.path.expanduser("~/Downloads")
-        base_dir = os.path.join(downloads_folder, sanitize_filename(domain))
-        
-        create_directory(base_dir)
-        
-        filename_map = {}
-        
-        # Download HTML
-        html_path = os.path.join(base_dir, 'index.html')
-        with open(html_path, 'w', encoding='utf-8') as f:
-            f.write(str(soup))
-        
-        # Prepare resource downloads
-        resources = [
-            link.get('href') for link in soup.find_all('link', rel='stylesheet', href=True)
-        ] + [
-            script.get('src') for script in soup.find_all('script', src=True)
-        ] + [
-            img.get('src') for img in soup.find_all('img', src=True)
-        ]
-
-        resources = [urljoin(url, resource) for resource in resources if resource]
-
-        # Download resources concurrently
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_resource = {
-                executor.submit(download_resource, resource, url, base_dir, filename_map): resource
-                for resource in resources
-            }
-            for future in concurrent.futures.as_completed(future_to_resource):
-                original_url, new_path = future.result()
-                if new_path:
-                    for tag in soup.find_all(['link', 'script', 'img']):
-                        if tag.get('src') == original_url:
-                            tag['src'] = new_path
-                        elif tag.get('href') == original_url:
-                            tag['href'] = new_path
-        
-        # Update references in HTML
-        with open(html_path, 'w', encoding='utf-8') as f:
-            f.write(str(soup))
-        
-        # Update references in CSS and JS files
-        for root, _, files in os.walk(base_dir):
-            for file in files:
-                if file.endswith(('.css', '.js')):
-                    file_path = os.path.join(root, file)
-                    update_file_references(file_path, filename_map)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    domain = urlparse(url).netloc
     
-    info(f"Website scraped and reconstructed in '{base_dir}'.")
+    downloads_folder = os.path.expanduser("~/Downloads")
+    base_dir = os.path.join(downloads_folder, sanitize_filename(domain))
     
-    # Send notification
-    pync.notify(
-        f"Website {url} has been scraped and saved in {base_dir}",
-        title="Web Scraping Complete"
-    )
+    create_directory(base_dir)
+    
+    filename_map = {}
+    
+    # Download HTML
+    html_path = os.path.join(base_dir, 'index.html')
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(str(soup))
+    
+    # Prepare resource downloads
+    resources = [
+        link.get('href') for link in soup.find_all('link', rel='stylesheet', href=True)
+    ] + [
+        script.get('src') for script in soup.find_all('script', src=True)
+    ] + [
+        img.get('src') for img in soup.find_all('img', src=True)
+    ]
+
+    resources = [urljoin(url, resource) for resource in resources if resource]
+
+    # Download resources concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_resource = {
+            executor.submit(download_resource, resource, url, base_dir, filename_map): resource
+            for resource in resources
+        }
+        for future in concurrent.futures.as_completed(future_to_resource):
+            original_url, new_path = future.result()
+            if new_path:
+                for tag in soup.find_all(['link', 'script', 'img']):
+                    if tag.get('src') == original_url:
+                        tag['src'] = new_path
+                    elif tag.get('href') == original_url:
+                        tag['href'] = new_path
+    
+    # Update references in HTML
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(str(soup))
+    
+    # Update references in CSS and JS files
+    for root, _, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith(('.css', '.js')):
+                file_path = os.path.join(root, file)
+                update_file_references(file_path, filename_map)
+
+    print_progress(f"Website scraped and reconstructed in '{base_dir}'.")
 
 def main():
     url = input("Enter the URL of the website to scrape: ")
