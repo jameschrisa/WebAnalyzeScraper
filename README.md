@@ -20,7 +20,7 @@ This Python application allows users to input a URL, analyze and download the we
 1. Clone this repository or download the script:
 
    ```
-   git clone https://github.com/yourusername/web-scraper-reconstructor.git
+   git clone https://github.com/yourusername/webAnalyzeScraper.git
    cd web-scraper-reconstructor
    ```
 
