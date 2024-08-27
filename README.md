@@ -1,11 +1,13 @@
 # Web Scraper and Reconstructor
 
-This Python application allows users to input a URL, analyze and download the website's elements, structure, source HTML, JavaScript, CSS, and other dependency files. It then reconstructs all the assets and files in the Downloads folder on your Mac, providing a visual progress indicator and a completion notification.
+This Python application allows users to input a URL, analyze and download the website's elements, structure, source HTML, JavaScript, CSS, and other dependency files. It then reconstructs all the assets and files in the Downloads folder on your Mac, maintaining the original website structure while providing a visual progress indicator and a completion notification.
 
 ## Features
 
 - Scrapes and downloads HTML, CSS, JavaScript, and images from a given URL
-- Reconstructs the website structure in a local directory within the Downloads folder
+- Reconstructs the website structure in a local directory within the Downloads folder, maintaining the original site hierarchy
+- Removes hash values from filenames while preserving file references
+- Groups resources by type (css, js, images, html) within each directory
 - Concurrent downloading of resources for improved performance
 - Rate limiting to respect server resources
 - Error handling and logging for reliable operation
@@ -52,20 +54,43 @@ This Python application allows users to input a URL, analyze and download the we
 
 4. Once completed, you'll receive a system notification, and the reconstructed website will be in a new directory within your Downloads folder.
 
-## Structure
+## Output Structure
 
-The scraped website will be reconstructed with the following structure in your Downloads folder:
+The scraped website will be reconstructed with a structure similar to the original website. Here's an example of what the output might look like:
 
 ```
-~/Downloads/domain_name/
+~/Downloads/example.com/
 ├── index.html
-├── css/
-│   └── [css files]
-├── js/
-│   └── [js files]
-└── images/
-    └── [image files]
+├── assets/
+│   ├── css/
+│   │   └── styles.css
+│   ├── js/
+│   │   └── main.js
+│   └── images/
+│       ├── logo.png
+│       └── banner.jpg
+├── about/
+│   ├── html/
+│   │   └── team.html
+│   └── images/
+│       └── team-photo.jpg
+└── blog/
+    ├── html/
+    │   ├── post1.html
+    │   └── post2.html
+    └── images/
+        ├── post1-image.jpg
+        └── post2-image.jpg
 ```
+
+This structure:
+- Maintains the original URL paths (e.g., `/about/team.html` becomes `/about/html/team.html`)
+- Groups resources by type within each directory (css, js, images, html)
+- Keeps the relative paths intact, making it easier to understand the website's structure
+
+## Filename Handling
+
+The script removes hash values from filenames (e.g., `style.a1b2c3d4.css` becomes `style.css`) while maintaining all internal references. This makes the downloaded files more readable and easier to manage.
 
 ## Console Output
 
@@ -85,6 +110,7 @@ Upon completion of the scraping process, you will receive a system notification 
 - Some websites may block or rate-limit scraping attempts. Always ensure you have permission to scrape a website before doing so.
 - The script currently only scrapes the initial URL provided and does not follow links to other pages on the site.
 - The current version is optimized for macOS. Some modifications may be needed for use on other operating systems.
+- Extremely large websites may take a significant amount of time to scrape and reconstruct.
 
 ## Contributing
 
