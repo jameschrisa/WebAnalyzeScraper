@@ -7,7 +7,6 @@ import mimetypes
 import concurrent.futures
 from cli_ui import info, error, warning, setup, spinner
 import pync
-import filetype
 
 setup(quiet=True)
 
@@ -39,19 +38,50 @@ def create_directory(path):
     except OSError as e:
         error(f"Error creating directory {path}: {str(e)}")
 
-def download_resource(url, base_dir, resource_type, filename_map):
+def get_resource_type(url):
+    _, ext = os.path.splitext(url)
+    ext = ext.lower()
+    if ext in ['.css']:
+        return 'css'
+    elif ext in ['.js']:
+        return 'js'
+    elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.svg']:
+        return 'images'
+    elif ext in ['.html', '.htm']:
+        return 'html'
+    else:
+        return 'other'
+
+def get_relative_path(url, base_url):
+    parsed_url = urlparse(url)
+    parsed_base = urlparse(base_url)
+    if parsed_url.netloc != parsed_base.netloc:
+        return None
+    path = parsed_url.path
+    if path.startswith('/'):
+        path = path[1:]
+    return path
+
+def download_resource(url, base_url, base_dir, filename_map):
     try:
-        resource_url = urljoin(url, resource_type.get('href') or resource_type.get('src'))
-        original_filename = os.path.basename(urlparse(resource_url).path)
+        relative_path = get_relative_path(url, base_url)
+        if not relative_path:
+            return None, None
+
+        resource_type = get_resource_type(url)
+        dir_path = os.path.dirname(relative_path)
+        original_filename = os.path.basename(relative_path)
         clean_filename = sanitize_filename(original_filename)
-        resource_path = os.path.join(base_dir, resource_type.name, clean_filename)
+        
+        resource_path = os.path.join(base_dir, dir_path, resource_type, clean_filename)
         create_directory(os.path.dirname(resource_path))
-        if download_file(resource_url, resource_path):
-            filename_map[original_filename] = clean_filename
-            return resource_type, os.path.relpath(resource_path, base_dir)
+        
+        if download_file(url, resource_path):
+            filename_map[original_filename] = os.path.join(dir_path, resource_type, clean_filename)
+            return url, os.path.relpath(resource_path, base_dir)
     except Exception as e:
-        error(f"Error downloading resource {resource_url}: {str(e)}")
-    return resource_type, None
+        error(f"Error downloading resource {url}: {str(e)}")
+    return None, None
 
 def update_file_references(file_path, filename_map):
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -87,27 +117,30 @@ def scrape_and_reconstruct(url):
         
         # Prepare resource downloads
         resources = [
-            *soup.find_all('link', rel='stylesheet'),
-            *soup.find_all('script', src=True),
-            *soup.find_all('img', src=True)
+            link.get('href') for link in soup.find_all('link', rel='stylesheet', href=True)
+        ] + [
+            script.get('src') for script in soup.find_all('script', src=True)
+        ] + [
+            img.get('src') for img in soup.find_all('img', src=True)
         ]
+
+        resources = [urljoin(url, resource) for resource in resources if resource]
 
         # Download resources concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             future_to_resource = {
-                executor.submit(download_resource, url, base_dir, resource, filename_map): resource
+                executor.submit(download_resource, resource, url, base_dir, filename_map): resource
                 for resource in resources
             }
             for future in concurrent.futures.as_completed(future_to_resource):
-                resource, new_path = future.result()
+                original_url, new_path = future.result()
                 if new_path:
-                    if resource.name == 'link':
-                        resource['href'] = new_path
-                    else:
-                        resource['src'] = new_path
+                    soup.find(src=original_url)['src'] = new_path
+                    soup.find(href=original_url)['href'] = new_path
         
         # Update references in HTML
-        update_file_references(html_path, filename_map)
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(str(soup))
         
         # Update references in CSS and JS files
         for root, _, files in os.walk(base_dir):
