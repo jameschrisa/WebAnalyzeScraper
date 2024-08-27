@@ -1,36 +1,23 @@
 import os
+import re
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import mimetypes
 import concurrent.futures
-import logging
-from requests.exceptions import RequestException
-from ratelimit import limits, sleep_and_retry
 from cli_ui import info, error, warning, setup, spinner
-import notify2
+import pync
+import filetype
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Set up cli-ui
 setup(quiet=True)
 
-# Set up notifications
-notify2.init('Web Scraper')
-
-# Rate limiting: 5 requests per second
-@sleep_and_retry
-@limits(calls=5, period=1)
 def rate_limited_get(url, timeout=10):
-    try:
-        response = requests.get(url, timeout=timeout)
-        response.raise_for_status()
-        return response
-    except RequestException as e:
-        error(f"Error fetching {url}: {str(e)}")
-        return None
+    # ... (keep the existing rate_limited_get function)
+
+def sanitize_filename(filename):
+    # Remove hash from filename
+    clean_name = re.sub(r'\.[a-f0-9]{8,}\.', '.', filename)
+    return "".join([c for c in clean_name if c.isalpha() or c.isdigit() or c in (' ', '-', '_', '.')]).rstrip()
 
 def download_file(url, path):
     response = rate_limited_get(url)
@@ -38,20 +25,13 @@ def download_file(url, path):
         try:
             with open(path, 'wb') as f:
                 f.write(response.content)
-            info(f"Downloaded: {url}")
+            info(f"Downloaded: {url} as {path}")
+            return True
         except IOError as e:
             error(f"Error saving file {path}: {str(e)}")
     else:
         warning(f"Failed to download: {url}")
-
-def get_file_extension(url, content_type):
-    parsed = urlparse(url)
-    ext = os.path.splitext(parsed.path)[1]
-    if ext:
-        return ext
-    
-    ext = mimetypes.guess_extension(content_type)
-    return ext if ext else '.html'
+    return False
 
 def create_directory(path):
     try:
@@ -59,19 +39,29 @@ def create_directory(path):
     except OSError as e:
         error(f"Error creating directory {path}: {str(e)}")
 
-def sanitize_filename(filename):
-    return "".join([c for c in filename if c.isalpha() or c.isdigit() or c in (' ', '-', '_')]).rstrip()
-
-def download_resource(url, base_dir, resource_type):
+def download_resource(url, base_dir, resource_type, filename_map):
     try:
         resource_url = urljoin(url, resource_type.get('href') or resource_type.get('src'))
-        resource_path = os.path.join(base_dir, resource_type.name, sanitize_filename(os.path.basename(resource_url)))
+        original_filename = os.path.basename(urlparse(resource_url).path)
+        clean_filename = sanitize_filename(original_filename)
+        resource_path = os.path.join(base_dir, resource_type.name, clean_filename)
         create_directory(os.path.dirname(resource_path))
-        download_file(resource_url, resource_path)
-        return resource_type, os.path.relpath(resource_path, base_dir)
+        if download_file(resource_url, resource_path):
+            filename_map[original_filename] = clean_filename
+            return resource_type, os.path.relpath(resource_path, base_dir)
     except Exception as e:
         error(f"Error downloading resource {resource_url}: {str(e)}")
-        return resource_type, None
+    return resource_type, None
+
+def update_file_references(file_path, filename_map):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    for original, clean in filename_map.items():
+        content = content.replace(original, clean)
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(content)
 
 def scrape_and_reconstruct(url):
     with spinner(f"Analyzing and downloading files from {url}"):
@@ -83,15 +73,17 @@ def scrape_and_reconstruct(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         domain = urlparse(url).netloc
         
-        # Use the Downloads folder on Mac
         downloads_folder = os.path.expanduser("~/Downloads")
         base_dir = os.path.join(downloads_folder, sanitize_filename(domain))
         
         create_directory(base_dir)
         
+        filename_map = {}
+        
         # Download HTML
-        with open(os.path.join(base_dir, 'index.html'), 'w', encoding='utf-8') as f:
-            f.write(soup.prettify())
+        html_path = os.path.join(base_dir, 'index.html')
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(str(soup))
         
         # Prepare resource downloads
         resources = [
@@ -103,7 +95,7 @@ def scrape_and_reconstruct(url):
         # Download resources concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             future_to_resource = {
-                executor.submit(download_resource, url, base_dir, resource): resource
+                executor.submit(download_resource, url, base_dir, resource, filename_map): resource
                 for resource in resources
             }
             for future in concurrent.futures.as_completed(future_to_resource):
@@ -114,18 +106,23 @@ def scrape_and_reconstruct(url):
                     else:
                         resource['src'] = new_path
         
-        # Save updated HTML
-        with open(os.path.join(base_dir, 'index.html'), 'w', encoding='utf-8') as f:
-            f.write(str(soup))
+        # Update references in HTML
+        update_file_references(html_path, filename_map)
+        
+        # Update references in CSS and JS files
+        for root, _, files in os.walk(base_dir):
+            for file in files:
+                if file.endswith(('.css', '.js')):
+                    file_path = os.path.join(root, file)
+                    update_file_references(file_path, filename_map)
     
     info(f"Website scraped and reconstructed in '{base_dir}'.")
     
     # Send notification
-    notification = notify2.Notification(
-        "Web Scraping Complete",
-        f"Website {url} has been scraped and saved in {base_dir}"
+    pync.notify(
+        f"Website {url} has been scraped and saved in {base_dir}",
+        title="Web Scraping Complete"
     )
-    notification.show()
 
 def main():
     url = input("Enter the URL of the website to scrape: ")
